@@ -1,0 +1,7 @@
+base   ebookexport
+author Nomen Nescio
+email  info@nomennesc.io
+date   2017-09-03
+name   ebookexport plugin
+desc   exports a page to epub
+url    https://nomennesc.io
