@@ -48,7 +48,7 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
 
 	$instructions = p_get_instructions($doc);
 	require_once DOKU_INC . 'inc/parser/xhtml.php';
-	$Renderer = & new Doku_Renderer_XHTML();
+	$Renderer = new Doku_Renderer_XHTML();
 	foreach ( $instructions as $instruction ) {
 	    call_user_func_array(array(&$Renderer, $instruction[0]),$instruction[1]);
 	} 
