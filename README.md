@@ -2,8 +2,6 @@
 
 Exports a page to epub
 
-Media items are currently not supported.
-
 If you install this plugin manually, make sure it is installed in
 lib/plugins/ebookexport/ - if the folder is called different it
 will not work!

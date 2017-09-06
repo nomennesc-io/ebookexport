@@ -44,60 +44,21 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
 
 	$mypage = pageinfo();
 	$mypath = $mypage["filepath"];
+	$doc = file_get_contents($mypath);
 
 	$Parser = & new Doku_Parser();
 	$Parser->Handler = & new Doku_Handler();
-
-	$Parser->addMode('listblock',new Doku_Parser_Mode_ListBlock());
-	$Parser->addMode('preformatted',new Doku_Parser_Mode_Preformatted()); 
 	$Parser->addMode('header',new Doku_Parser_Mode_Header());
-	$Parser->addMode('table',new Doku_Parser_Mode_Table());
-
-	$formats = array (
-	    'strong', 'emphasis', 'underline', 'monospace',
-	    'subscript', 'superscript', 'deleted',
-	);
-	foreach ( $formats as $format ) {
-	    $Parser->addMode($format,new Doku_Parser_Mode_Formatting($format));
-	}
-
-	$Parser->addMode('linebreak',new Doku_Parser_Mode_Linebreak());
-	$Parser->addMode('footnote',new Doku_Parser_Mode_Footnote());
-	$Parser->addMode('hr',new Doku_Parser_Mode_HR());
- 
-	$Parser->addMode('unformatted',new Doku_Parser_Mode_Unformatted());
-	$Parser->addMode('php',new Doku_Parser_Mode_PHP());
-	$Parser->addMode('html',new Doku_Parser_Mode_HTML());
-	$Parser->addMode('code',new Doku_Parser_Mode_Code());
-	$Parser->addMode('file',new Doku_Parser_Mode_File());
-	$Parser->addMode('quote',new Doku_Parser_Mode_Quote());
-
-	$Parser->addMode('acronym',new Doku_Parser_Mode_Acronym(array_keys(getAcronyms())));
-	$Parser->addMode('entity',new Doku_Parser_Mode_Entity(array_keys(getEntities())));
-	 
-	$Parser->addMode('multiplyentity',new Doku_Parser_Mode_MultiplyEntity());
-	$Parser->addMode('quotes',new Doku_Parser_Mode_Quotes());
- 
-	$Parser->addMode('camelcaselink',new Doku_Parser_Mode_CamelCaseLink());
-	$Parser->addMode('internallink',new Doku_Parser_Mode_InternalLink());
-	$Parser->addMode('media',new Doku_Parser_Mode_Media());
-	$Parser->addMode('externallink',new Doku_Parser_Mode_ExternalLink());
-	$Parser->addMode('emaillink',new Doku_Parser_Mode_EmailLink());
-	$Parser->addMode('windowssharelink',new Doku_Parser_Mode_WindowsShareLink());
-	$Parser->addMode('filelink',new Doku_Parser_Mode_FileLink());
-	$Parser->addMode('eol',new Doku_Parser_Mode_Eol());
-
-	$doc = file_get_contents($mypath);
-
 	$instructions = $Parser->parse($doc);
-
 	require_once DOKU_INC . 'inc/parser/xhtml.php';
 	$Renderer = & new Doku_Renderer_XHTML();
-
 	foreach ( $instructions as $instruction ) {
 	    call_user_func_array(array(&$Renderer, $instruction[0]),$instruction[1]);
 	} 
-	$pages = $Renderer->doc;
+
+	$tocarray = $Renderer->toc;
+
+	$pages = p_render('xhtml',p_get_instructions($doc),$info);
 
 	if(isset($conf['baseurl']) && ($conf['baseurl'] != '')){
 	    $url = $conf['baseurl'] . '/';
@@ -128,10 +89,15 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
 	$container = '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>';
 	file_put_contents($tempdir . "/META-INF/container.xml", $container);
 
-	$mytitle = preg_replace('/^.*:/','',$ID);
-	$mytitle = ucwords(preg_replace('/_/',' ',$mytitle));
+	if(isset($mypage["meta"]["title"])){
+	    $mytitle = $mypage["meta"]["title"];
+	} else{
+	    $mytitle = preg_replace('/^.*:/','',$ID);
+	    $mytitle = ucwords(preg_replace('/_/',' ',$mytitle));
+	}
 
 	$epubuuid = preg_replace('/^(........)(....)(....)(....)(............).*/','${1}-${2}-${3}-${4}-${5}',md5($conf['title'] . $mytitle . $mypage['lastmod']));
+	$files = array('content.opf','mimetype','page_styles.css','pages.xhtml','stylesheet.css','titlepage.xhtml','toc.ncx','META-INF/container.xml');
 
 	$content = "<?xml version='1.0' encoding='utf-8'?>";
 	$content .= '<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="uuid_id">';
@@ -145,6 +111,19 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
 	$content .= '<dc:identifier id="uuid_id" opf:scheme="uuid">' . $epubuuid . '</dc:identifier>';
 	$content .= '</metadata>';
 	$content .= '<manifest>';
+	if(isset($mypage["meta"]["relation"]["media"])){
+            foreach($mypage["meta"]["relation"]["media"] as $mediaitem => $whatever){
+            	$mediafile = mediaFN($mediaitem);
+		$mediamime = mime_content_type($mediafile);
+                $medialink = ml($mediaitem);
+                $mediadir = dirname($medialink);
+		if(!is_dir($tempdir . $mediadir))
+		    mkdir($tempdir . $mediadir, 0777, true);
+		copy($mediafile,$tempdir . $medialink);
+		array_push($files,substr($medialink,1));
+		$content .= '<item href="' . $medialink . '" id="' . $mediaitem . '" media-type="' . $mediamime . '"/>';
+            }
+	}
 	$content .= '<item href="pages.xhtml" id="id1" media-type="application/xhtml+xml"/>';
 	$content .= '<item href="page_styles.css" id="page_css" media-type="text/css"/>';
 	$content .= '<item href="stylesheet.css" id="css" media-type="text/css"/>';
@@ -191,9 +170,6 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
 	$toc .= '<text>Titel</text>';
 	$toc .= '</docTitle>';
 	$toc .= '<navMap>';
-
-	$tocarray = $Renderer->toc;
-
 	for($i=0;$i<sizeof($tocarray);$i++){
 	    $toc .= '<navPoint id="' . substr($tocarray[$i]["link"],1) . '" playOrder="' . $i . '">';
 	    $toc .= '<navLabel><text>' . $tocarray[$i]["title"] . '</text>';
@@ -203,7 +179,6 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
 	$toc .= '</navMap></ncx>';
         file_put_contents($tempdir . "/toc.ncx",$toc);
 
-	$files = array('content.opf','mimetype','page_styles.css','pages.xhtml','stylesheet.css','titlepage.xhtml','toc.ncx','META-INF/container.xml');
 	$zip = new ZipArchive();
 	$zipfile = $tempdir . "/" . $ID . ".epub";
 	$zip->open($zipfile,ZipArchive::CREATE);
@@ -216,7 +191,7 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
         header('Cache-Control: must-revalidate, no-cache');
         header('Pragma: no-cache');
 
-        $filename = $ID . ".epub";
+        $filename = preg_replace('/ /','_',$mytitle) . ".epub";
         header('Content-Disposition: attachment; filename="' . $filename . '";');
 
         //Bookcreator uses jQuery.fileDownload.js, which requires a cookie.
