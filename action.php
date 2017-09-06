@@ -128,9 +128,10 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
 	$container = '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>';
 	file_put_contents($tempdir . "/META-INF/container.xml", $container);
 
-	$mytitle = ucwords(preg_replace('/_/',' ',$ID));
+	$mytitle = preg_replace('/^.*:/','',$ID);
+	$mytitle = ucwords(preg_replace('/_/',' ',$mytitle));
 
-	$epubuuid = preg_replace('/^(........)(....)(....)(....)(............).*/','${1}-${2}-${3}-${4}-${5}',md5($conf['title'] . $mytitle));
+	$epubuuid = preg_replace('/^(........)(....)(....)(....)(............).*/','${1}-${2}-${3}-${4}-${5}',md5($conf['title'] . $mytitle . $mypage['lastmod']));
 
 	$content = "<?xml version='1.0' encoding='utf-8'?>";
 	$content .= '<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="uuid_id">';
@@ -139,7 +140,7 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
 	$content .= '<dc:title>' . $mytitle . '</dc:title>';
 	$content .= '<dc:creator opf:file-as="' . $conf['title'] . '" opf:role="aut">' . $conf['title'] . '</dc:creator>';
 	$content .= '<meta name="cover" content="cover"/>';
-	$content .= '<dc:date>' . date("Y-m-d\TH:i:s:P",mypage['lastmod']) . '</dc:date>';
+	$content .= '<dc:date>' . date("Y-m-d\TH:i:s:P",$mypage['lastmod']) . '</dc:date>';
 	$content .= '<dc:contributor opf:role="bkp"></dc:contributor>';
 	$content .= '<dc:identifier id="uuid_id" opf:scheme="uuid">' . $epubuuid . '</dc:identifier>';
 	$content .= '</metadata>';
@@ -212,9 +213,8 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
 	$zip->close();
 
         header('Content-Type: application/epub+zip');
-        header('Cache-Control: must-revalidate, no-transform, post-check=0, pre-check=0');
-        header('Pragma: public');
-        http_conditionalRequest(filemtime($zipfile));
+        header('Cache-Control: must-revalidate, no-cache');
+        header('Pragma: no-cache');
 
         $filename = $ID . ".epub";
         header('Content-Disposition: attachment; filename="' . $filename . '";');
@@ -222,138 +222,27 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
         //Bookcreator uses jQuery.fileDownload.js, which requires a cookie.
         header('Set-Cookie: fileDownload=true; path=/');
 
-        //try to send file, and exit if done
-        $this->my_http_sendfile($zipfile,$tempdir);
-
         $fp = @fopen($zipfile, "rb");
         if($fp) {
-            $this->my_http_rangeRequest($fp, filesize($zipfile), 'application/epub+zip', $tempdir);
+	    $size = filesize($zipfile);
+	    header('Accept-Ranges: bytes');
+            header("Content-Length: $size");
+	    fseek($fp,0);
+	    $chunk = ($size > HTTP_CHUNK_SIZE) ? HTTP_CHUNK_SIZE : $size;
+	    while (!feof($fp) && $chunk > 0) {
+		@set_time_limit(30);
+		print fread($fp, $chunk);
+		flush();
+		$size -= $chunk;
+		$chunk = ($size > HTTP_CHUNK_SIZE) ? HTTP_CHUNK_SIZE : $size;
+	    }
         } else {
             header("HTTP/1.0 500 Internal Server Error");
             print "Could not read file - bad permissions?";
+            $ranges[] = array(0,$size,$size);
         }
 	$this->rrmdir($tempdir);
-    }
-
-    private function my_http_sendfile($file,$tempdir) {
-      global $conf;
-  
-      //use x-sendfile header to pass the delivery to compatible web servers
-      if($conf['xsendfile'] == 1){
-          header("X-LIGHTTPD-send-file: $file");
-          ob_end_clean();
-	  $this->rrmdir($tempdir);
-          exit;
-      }elseif($conf['xsendfile'] == 2){
-          header("X-Sendfile: $file");
-          ob_end_clean();
-	  $this->rrmdir($tempdir);
-          exit;
-      }elseif($conf['xsendfile'] == 3){
-          // FS#2388 nginx just needs the relative path.
-          $file = DOKU_REL.substr($file, strlen(fullpath(DOKU_INC)) + 1);
-          header("X-Accel-Redirect: $file");
-          ob_end_clean();
-	  $this->rrmdir($tempdir);
-          exit;
-      }
-    }
-  
-  /**
-   * Send file contents supporting rangeRequests
-   *
-   * This function exits the running script
-   *
-   * @param resource $fh - file handle for an already open file
-   * @param int $size     - size of the whole file
-   * @param int $mime     - MIME type of the file
-   *
-   * @author Andreas Gohr <andi@splitbrain.org>
-   */
-    private function my_http_rangeRequest($fh,$size,$mime,$tempdir){
-      $ranges  = array();
-      $isrange = false;
-  
-      header('Accept-Ranges: bytes');
-  
-      if(!isset($_SERVER['HTTP_RANGE'])){
-          // no range requested - send the whole file
-          $ranges[] = array(0,$size,$size);
-      }else{
-          $t = explode('=', $_SERVER['HTTP_RANGE']);
-          if (!$t[0]=='bytes') {
-              // we only understand byte ranges - send the whole file
-              $ranges[] = array(0,$size,$size);
-          }else{
-              $isrange = true;
-              // handle multiple ranges
-              $r = explode(',',$t[1]);
-              foreach($r as $x){
-                  $p = explode('-', $x);
-                  $start = (int)$p[0];
-                  $end   = (int)$p[1];
-                  if (!$end) $end = $size - 1;
-                  if ($start > $end || $start > $size || $end > $size){
-                      header('HTTP/1.1 416 Requested Range Not Satisfiable');
-                      print 'Bad Range Request!';
-	              $this->rrmdir($tempdir);
-                      exit;
-                  }
-                  $len = $end - $start + 1;
-                  $ranges[] = array($start,$end,$len);
-              }
-          }
-      }
-      $parts = count($ranges);
-  
-      // now send the type and length headers
-      if(!$isrange){
-          header("Content-Type: $mime",true);
-      }else{
-          header('HTTP/1.1 206 Partial Content');
-          if($parts == 1){
-              header("Content-Type: $mime",true);
-          }else{
-              header('Content-Type: multipart/byteranges; boundary='.HTTP_MULTIPART_BOUNDARY,true);
-          }
-      }
-  
-      // send all ranges
-      for($i=0; $i<$parts; $i++){
-          list($start,$end,$len) = $ranges[$i];
-  
-          // multipart or normal headers
-          if($parts > 1){
-              echo HTTP_HEADER_LF.'--'.HTTP_MULTIPART_BOUNDARY.HTTP_HEADER_LF;
-              echo "Content-Type: $mime".HTTP_HEADER_LF;
-              echo "Content-Range: bytes $start-$end/$size".HTTP_HEADER_LF;
-              echo HTTP_HEADER_LF;
-          }else{
-              header("Content-Length: $len");
-              if($isrange){
-                  header("Content-Range: bytes $start-$end/$size");
-              }
-          }
-  
-          // send file content
-          fseek($fh,$start); //seek to start of range
-          $chunk = ($len > HTTP_CHUNK_SIZE) ? HTTP_CHUNK_SIZE : $len;
-          while (!feof($fh) && $chunk > 0) {
-              @set_time_limit(30); // large files can take a lot of time
-              print fread($fh, $chunk);
-              flush();
-              $len -= $chunk;
-              $chunk = ($len > HTTP_CHUNK_SIZE) ? HTTP_CHUNK_SIZE : $len;
-          }
-      }
-      if($parts > 1){
-          echo HTTP_HEADER_LF.'--'.HTTP_MULTIPART_BOUNDARY.'--'.HTTP_HEADER_LF;
-      }
-  
-      // everything should be done here, exit (or return if testing)
-      if (defined('SIMPLE_TEST')) return;
-      $this->rrmdir($tempdir);
-      exit;
+	exit;
     }
 
     private function rrmdir($dir) { 
