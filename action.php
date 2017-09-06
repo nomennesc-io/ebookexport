@@ -46,10 +46,7 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
 	$mypath = $mypage["filepath"];
 	$doc = file_get_contents($mypath);
 
-	$Parser = & new Doku_Parser();
-	$Parser->Handler = & new Doku_Handler();
-	$Parser->addMode('header',new Doku_Parser_Mode_Header());
-	$instructions = $Parser->parse($doc);
+	$instructions = p_get_instructions($doc);
 	require_once DOKU_INC . 'inc/parser/xhtml.php';
 	$Renderer = & new Doku_Renderer_XHTML();
 	foreach ( $instructions as $instruction ) {
@@ -57,8 +54,7 @@ class action_plugin_ebookexport extends DokuWiki_Action_Plugin {
 	} 
 
 	$tocarray = $Renderer->toc;
-
-	$pages = p_render('xhtml',p_get_instructions($doc),$info);
+	$pages = $Renderer->doc;
 
 	if(isset($conf['baseurl']) && ($conf['baseurl'] != '')){
 	    $url = $conf['baseurl'] . '/';
